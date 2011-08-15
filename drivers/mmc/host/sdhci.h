@@ -252,6 +252,10 @@ struct sdhci_host {
 
 	const struct sdhci_ops	*ops;		/* Low level hw interface */
 
+#ifndef CONFIG_SAMSUNG_FASCINATE
+	struct regulator	*vmmc;		/* Power regulator */
+#endif
+
 	/* Internal data */
 	struct mmc_host		*mmc;		/* MMC structure */
 	u64			dma_mask;	/* custom DMA mask */
