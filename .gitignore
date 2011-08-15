@@ -59,6 +59,10 @@ include/config
 include/linux/version.h
 include/generated
 
+# other files
+init/version.c
+Makefile
+
 # stgit generated dirs
 patches-*
 
@@ -79,5 +83,6 @@ GTAGS
 *.orig
 *.rej
 *.bak
+*.bak2
 *~
 \#*#
