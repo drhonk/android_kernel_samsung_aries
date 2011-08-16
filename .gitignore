@@ -60,8 +60,6 @@ include/linux/version.h
 include/generated
 
 # other files
-init/version.c
-Makefile
 
 # stgit generated dirs
 patches-*
