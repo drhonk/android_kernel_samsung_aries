@@ -37,7 +37,8 @@ enum perf_level {
 	MAX_PERF_LEVEL = L7,
 };
 
-#define SLEEP_FREQ      (800 * 1000) /* Use 800MHz when entering sleep */
+/* testing to see if this help */
+#define SLEEP_FREQ      (400 * 1000) /*(800 * 1000)*/ /* Use 800MHz when entering sleep */
 
 /* additional symantics for "relation" in cpufreq with pm */
 #define DISABLE_FURTHER_CPUFREQ         0x10
