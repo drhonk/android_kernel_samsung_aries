@@ -1,8 +1,8 @@
 VERSION = 2
 PATCHLEVEL = 6
 SUBLEVEL = 35
-EXTRAVERSION = .7
-NAME = Bali-CM_v1.0beta4
+EXTRAVERSION = .12
+NAME = Yokohama
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"

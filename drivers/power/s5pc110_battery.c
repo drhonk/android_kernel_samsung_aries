@@ -103,6 +103,10 @@ struct battery_info {
 	u32 batt_soc;
 	u32 charging_status;
 	bool batt_is_full;      /* 0 : Not full 1: Full */
+
+	#if defined (CONFIG_SAMSUNG_VIBRANT)
+	u32 batt_max_soc;
+	#endif
 };
 
 struct adc_sample_info {
@@ -259,13 +263,35 @@ static int s3c_bat_get_property(struct power_supply *bat_ps,
 		val->intval = 1;
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		#if defined (CONFIG_SAMSUNG_VIBRANT)
+		if (chg->pdata && chg->pdata->psy_fuelgauge &&
+			chg->pdata->psy_fuelgauge->get_property &&
+			chg->pdata->psy_fuelgauge->get_property(chg->pdata->psy_fuelgauge,
+				POWER_SUPPLY_PROP_VOLTAGE_NOW, val) < 0)
+			return -EINVAL;
+		break;
+		#endif
 	case POWER_SUPPLY_PROP_CAPACITY:
+		#if defined (CONFIG_SAMSUNG_VIBRANT)
+		if (chg->pdata && chg->pdata->psy_fuelgauge &&
+			chg->pdata->psy_fuelgauge->get_property &&
+			chg->pdata->psy_fuelgauge->get_property(chg->pdata->psy_fuelgauge,
+				POWER_SUPPLY_PROP_CAPACITY, val) < 0)
+		#else	
 		if (chg->pdata &&
 			 chg->pdata->psy_fuelgauge &&
 			 chg->pdata->psy_fuelgauge->get_property &&
 			 chg->pdata->psy_fuelgauge->get_property(
 				chg->pdata->psy_fuelgauge, psp, val) < 0)
+		#endif
 			return -EINVAL;
+			#if defined (CONFIG_SAMSUNG_VIBRANT)
+			if (chg->bat_info.batt_max_soc > 0) {
+				val->intval = ((val->intval * 100) / (int)chg->bat_info.batt_max_soc);
+				if (val->intval > 100)
+					val->intval = 100;
+			}
+			#endif
 		break;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:
 		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
@@ -761,6 +787,14 @@ static irqreturn_t max8998_int_work_func(int irq, void *max8998_chg)
 		pr_info("%s : pmic interrupt\n", __func__);
 		chg->set_batt_full = 1;
 		chg->bat_info.batt_is_full = true;
+
+		#if defined (CONFIG_SAMSUNG_VIBRANT)
+		if (chg->bat_info.batt_soc > 0 &&
+			chg->bat_info.batt_soc > chg->bat_info.batt_max_soc) {
+			chg->bat_info.batt_max_soc = chg->bat_info.batt_soc;
+			pr_info("%s : batt_max_soc=%d\n", __func__, chg->bat_info.batt_max_soc);
+			}
+		#endif
 	}
 
 	wake_lock(&chg->work_wake_lock);
@@ -820,6 +854,11 @@ static __devinit int max8998_charger_probe(struct platform_device *pdev)
 	chg->polling_interval = POLLING_INTERVAL;
 	chg->bat_info.batt_health = POWER_SUPPLY_HEALTH_GOOD;
 	chg->bat_info.batt_is_full = false;
+
+	#if defined (CONFIG_SAMSUNG_VIBRANT)
+	chg->bat_info.batt_max_soc = 0;
+	#endif
+
 	chg->set_charge_timeout = false;
 
 	chg->cable_status = CABLE_TYPE_NONE;

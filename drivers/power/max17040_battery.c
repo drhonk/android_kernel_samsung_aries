@@ -129,13 +129,20 @@ static void max17040_get_soc(struct i2c_client *client)
 	struct max17040_chip *chip = i2c_get_clientdata(client);
 	u8 msb;
 	u8 lsb;
+
+	// Revert Vibrant to older code	
+	#if defined (CONFIG_SAMSUNG_CAPTIVATE) || defined (CONFIG_SAMSUNG_FASCINATE) || defined (CONFIG_SAMSUNG_GALAXYS) || defined (CONFIG_SAMSUNG_GALAXYSB)
 	u32 soc = 0;
 	u32 temp = 0;
 	u32 temp_soc = 0;
+	#endif
 
 	msb = max17040_read_reg(client, MAX17040_SOC_MSB);
 	lsb = max17040_read_reg(client, MAX17040_SOC_LSB);
 
+	#if defined (CONFIG_SAMSUNG_VIBRANT)
+	chip->soc = min(msb, (u8)100);
+	#else
 	temp = msb * 100 + ((lsb * 100) / 256);
 
 	if (temp >= 100)
@@ -162,6 +169,7 @@ static void max17040_get_soc(struct i2c_client *client)
 		soc = 100;
 
 	chip->soc = soc;
+	#endif
 }
 
 static void max17040_get_version(struct i2c_client *client)
