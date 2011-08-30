@@ -285,6 +285,10 @@ static void cypress_touchkey_early_resume(struct early_suspend *h)
 	struct cypress_touchkey_devdata *devdata =
 		container_of(h, struct cypress_touchkey_devdata, early_suspend);
 
+	// Set is_sleeping to false early to prevent notify_led_off from turning the
+	// touch key off after we turn it on
+	devdata->is_sleeping = false;
+
 	devdata->pdata->touchkey_onoff(TOUCHKEY_ON);
 
 	if (i2c_touchkey_write_byte(devdata, devdata->backlight_on)) {
@@ -297,7 +301,6 @@ static void cypress_touchkey_early_resume(struct early_suspend *h)
 	devdata->is_dead = false;
 	enable_irq(devdata->client->irq);
 	devdata->is_powering_on = false;
-	devdata->is_sleeping = false;
 	mod_timer(&bl_timer, jiffies + msecs_to_jiffies(BACKLIGHT_TIMEOUT));
 }
 #endif
