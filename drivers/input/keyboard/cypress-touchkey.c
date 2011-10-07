@@ -47,7 +47,11 @@
 #define DEVICE_NAME "cypress-touchkey"
 
 int bl_on = 0;
+static DECLARE_MUTEX(enable_sem);
+static DECLARE_MUTEX(i2c_sem);
+
 struct cypress_touchkey_devdata *bl_devdata;
+
 static struct timer_list bl_timer;
 static void bl_off(struct work_struct *bl_off_work);
 static DECLARE_WORK(bl_off_work, bl_off);
@@ -71,18 +75,24 @@ static int i2c_touchkey_read_byte(struct cypress_touchkey_devdata *devdata,
 	int ret;
 	int retry = 2;
 
+	down(&i2c_sem);
+
 	while (true) {
 		ret = i2c_smbus_read_byte(devdata->client);
 		if (ret >= 0) {
 			*val = ret;
-			return 0;
+			ret = 0;
+			break;
 		}
 
+		if (!retry--) {
             dev_err(&devdata->client->dev, "i2c read error\n");
-	    if (!retry--)
 			break;
+        }
 		msleep(10);
 	}
+
+	up(&i2c_sem);
 
 	return ret;
 }
@@ -93,16 +103,23 @@ static int i2c_touchkey_write_byte(struct cypress_touchkey_devdata *devdata,
 	int ret;
 	int retry = 2;
 
+	down(&i2c_sem);
+
 	while (true) {
 		ret = i2c_smbus_write_byte(devdata->client, val);
-		if (!ret)
-			return 0;
-
-            dev_err(&devdata->client->dev, "i2c write error\n");
-	    if (!retry--) 
+		if (!ret) {
+			ret = 0;
 			break;
+		}
+
+		if (!retry--) {
+            dev_err(&devdata->client->dev, "i2c write error\n");
+			break;
+        }
 		msleep(10);
 	}
+
+	up(&i2c_sem);
 
 	return ret;
 }
@@ -147,6 +164,8 @@ static int recovery_routine(struct cypress_touchkey_devdata *devdata)
 
 	irq_eint = devdata->client->irq;
 
+	down(&enable_sem);
+
 	all_keys_up(devdata);
 
 	disable_irq_nosync(irq_eint);
@@ -167,6 +186,7 @@ static int recovery_routine(struct cypress_touchkey_devdata *devdata)
 	dev_err(&devdata->client->dev, "%s: touchkey died\n", __func__);
 out:
 	dev_err(&devdata->client->dev, "%s: recovery_routine\n", __func__);
+	up(&enable_sem);
 	return ret;
 }
 
@@ -198,14 +218,15 @@ static irqreturn_t touchkey_interrupt_thread(int irq, void *touchkey_devdata)
 				"range\n", __func__);
 			goto err;
 		}
+
 		/* Don't send down event while the touch screen is being pressed
-     		 * to prevent accidental touch key hit.
-     		 */
-    		if ((data & UPDOWN_EVENT_MASK) || !touch_state_val) {
-      		  input_report_key(devdata->input_dev,
-        	    devdata->pdata->keycode[scancode],
-        	      !(data & UPDOWN_EVENT_MASK));
-    		}
+		 * to prevent accidental touch key hit.
+		 */
+		if ((data & UPDOWN_EVENT_MASK) || !touch_state_val) {
+			input_report_key(devdata->input_dev,
+				devdata->pdata->keycode[scancode],
+				!(data & UPDOWN_EVENT_MASK));
+		}
 	} else {
 		for (i = 0; i < devdata->pdata->keycode_cnt; i++)
 			input_report_key(devdata->input_dev,
@@ -236,12 +257,17 @@ static void notify_led_on(void) {
 	if (unlikely(bl_devdata->is_dead))
 		return;
 
+	down(&enable_sem);
+
 	if (bl_devdata->is_sleeping) {
 		bl_devdata->pdata->touchkey_sleep_onoff(TOUCHKEY_ON);
 		bl_devdata->pdata->touchkey_onoff(TOUCHKEY_ON);
 	}
 	i2c_touchkey_write_byte(bl_devdata, bl_devdata->backlight_on);
 	bl_on = 1;
+
+	up(&enable_sem);
+
 	printk(KERN_DEBUG "%s: notification led enabled\n", __FUNCTION__);
 }
 
@@ -249,7 +275,10 @@ static void notify_led_off(void) {
 	if (unlikely(bl_devdata->is_dead))
 		return;
 
-	if (bl_on)
+	// Avoid race condition with touch key resume
+	down(&enable_sem);
+
+	if (bl_on && bl_timer.expires < jiffies) // Don't disable if there's a timer scheduled
 		i2c_touchkey_write_byte(bl_devdata, bl_devdata->backlight_off);
 
 	bl_devdata->pdata->touchkey_sleep_onoff(TOUCHKEY_OFF);
@@ -257,6 +286,9 @@ static void notify_led_off(void) {
 		bl_devdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
 
 	bl_on = 0;
+
+	up(&enable_sem);
+
 	printk(KERN_DEBUG "%s: notification led disabled\n", __FUNCTION__);
 }
 
@@ -266,15 +298,22 @@ static void cypress_touchkey_early_suspend(struct early_suspend *h)
 	struct cypress_touchkey_devdata *devdata =
 		container_of(h, struct cypress_touchkey_devdata, early_suspend);
 
+	down(&enable_sem);
+
 	devdata->is_powering_on = true;
 
-	if (unlikely(devdata->is_dead))
+	if (unlikely(devdata->is_dead)) {
+		up(&enable_sem);
 		return;
+	}
 
 	disable_irq(devdata->client->irq);
 	devdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
 	all_keys_up(devdata);
 	devdata->is_sleeping = true;
+
+	up(&enable_sem);
+
 	if (bl_on)
 		notify_led_on();
 }
@@ -284,9 +323,8 @@ static void cypress_touchkey_early_resume(struct early_suspend *h)
 	struct cypress_touchkey_devdata *devdata =
 		container_of(h, struct cypress_touchkey_devdata, early_suspend);
 
-  	// Set is_sleeping to false early to prevent notify_led_off from turning the
-  	// touch key off after we turn it on
-  	devdata->is_sleeping = false;
+	// Avoid race condition with LED notification disable
+	down(&enable_sem);
 
 	devdata->pdata->touchkey_onoff(TOUCHKEY_ON);
 
@@ -295,11 +333,16 @@ static void cypress_touchkey_early_resume(struct early_suspend *h)
 		devdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
 		dev_err(&devdata->client->dev, "%s: touch keypad not responding"
 				" to commands, disabling\n", __func__);
+		up(&enable_sem);
 		return;
 	}
 	devdata->is_dead = false;
 	enable_irq(devdata->client->irq);
 	devdata->is_powering_on = false;
+	devdata->is_sleeping = false;
+
+	up(&enable_sem);
+
 	mod_timer(&bl_timer, jiffies + msecs_to_jiffies(BACKLIGHT_TIMEOUT));
 }
 #endif
@@ -451,12 +494,13 @@ static int cypress_touchkey_probe(struct i2c_client *client,
 	if (misc_register(&bl_led_device))
 		printk("%s misc_register(%s) failed\n", __FUNCTION__, bl_led_device.name);
 	else {
-		bl_devdata = devdata;
 		if (sysfs_create_group(&bl_led_device.this_device->kobj, &bl_led_group) < 0)
 			pr_err("failed to create sysfs group for device %s\n", bl_led_device.name);
 	}
 
+    bl_devdata = devdata;
 	setup_timer(&bl_timer, bl_timer_callback, 0);
+
 	return 0;
 
 err_req_irq:
@@ -482,6 +526,7 @@ static int __devexit i2c_touchkey_remove(struct i2c_client *client)
 	dev_err(&client->dev, "%s: i2c_touchkey_remove\n", __func__);
 
 	misc_deregister(&bl_led_device);
+
 	unregister_early_suspend(&devdata->early_suspend);
 	/* If the device is dead IRQs are disabled, we need to rebalance them */
 	if (unlikely(devdata->is_dead))
