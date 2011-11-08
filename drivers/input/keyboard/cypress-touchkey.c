@@ -42,8 +42,6 @@
 #define OLD_BACKLIGHT_ON	0x1
 #define OLD_BACKLIGHT_OFF	0x2
 
-#define BACKLIGHT_TIMEOUT	1600
-
 #define DEVICE_NAME "cypress-touchkey"
 
 int bl_on = 0;
@@ -52,6 +50,7 @@ static DECLARE_MUTEX(i2c_sem);
 
 struct cypress_touchkey_devdata *bl_devdata;
 
+static int bl_timeout = 1600; // This gets overridden by userspace AriesParts
 static struct timer_list bl_timer;
 static void bl_off(struct work_struct *bl_off_work);
 static DECLARE_WORK(bl_off_work, bl_off);
@@ -149,6 +148,12 @@ void bl_timer_callback(unsigned long data)
 	schedule_work(&bl_off_work);
 }
 
+static void bl_set_timeout() {
+	if (bl_timeout > 0) {
+		mod_timer(&bl_timer, jiffies + msecs_to_jiffies(bl_timeout));
+	}
+}
+
 static int recovery_routine(struct cypress_touchkey_devdata *devdata)
 {
 	int ret = -1;
@@ -235,7 +240,7 @@ static irqreturn_t touchkey_interrupt_thread(int irq, void *touchkey_devdata)
 	}
 
 	input_sync(devdata->input_dev);
-	mod_timer(&bl_timer, jiffies + msecs_to_jiffies(BACKLIGHT_TIMEOUT));
+	bl_set_timeout();
 err:
 	return IRQ_HANDLED;
 }
@@ -254,7 +259,7 @@ static irqreturn_t touchkey_interrupt_handler(int irq, void *touchkey_devdata)
 }
 
 static void notify_led_on(void) {
-	if (unlikely(bl_devdata->is_dead))
+	if (unlikely(bl_devdata->is_dead) || bl_on)
 		return;
 
 	down(&enable_sem);
@@ -272,7 +277,7 @@ static void notify_led_on(void) {
 }
 
 static void notify_led_off(void) {
-	if (unlikely(bl_devdata->is_dead))
+	if (unlikely(bl_devdata->is_dead) || !bl_on)
 		return;
 
 	// Avoid race condition with touch key resume
@@ -308,14 +313,14 @@ static void cypress_touchkey_early_suspend(struct early_suspend *h)
 	}
 
 	disable_irq(devdata->client->irq);
-	devdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
+
+	if (!bl_on)
+		devdata->pdata->touchkey_onoff(TOUCHKEY_OFF);
+
 	all_keys_up(devdata);
 	devdata->is_sleeping = true;
 
 	up(&enable_sem);
-
-	if (bl_on)
-		notify_led_on();
 }
 
 static void cypress_touchkey_early_resume(struct early_suspend *h)
@@ -343,7 +348,7 @@ static void cypress_touchkey_early_resume(struct early_suspend *h)
 
 	up(&enable_sem);
 
-	mod_timer(&bl_timer, jiffies + msecs_to_jiffies(BACKLIGHT_TIMEOUT));
+	bl_set_timeout();
 }
 #endif
 
@@ -364,10 +369,22 @@ static ssize_t led_status_write(struct device *dev, struct device_attribute *att
 	return size;
 }
 
+static ssize_t bl_timeout_read(struct device *dev, struct device_attribute *attr, char *buf) {
+	return sprintf(buf,"%d\n", bl_timeout);
+}
+
+static ssize_t bl_timeout_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	sscanf(buf, "%d\n", &bl_timeout);
+	return size;
+}
+
 static DEVICE_ATTR(led, S_IRUGO | S_IWUGO , led_status_read, led_status_write);
+static DEVICE_ATTR(bl_timeout, S_IRUGO | S_IWUGO, bl_timeout_read, bl_timeout_write);
 
 static struct attribute *bl_led_attributes[] = {
 		&dev_attr_led.attr,
+		&dev_attr_bl_timeout.attr, // Not the best place, but creating a new device is more trouble that it's worth
 		NULL
 };
 
